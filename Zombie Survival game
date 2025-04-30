@@ -1,1 +1,413 @@
+import javafx.animation.AnimationTimer;
+import javafx.application.Application;
+import javafx.geometry.Pos;
+import javafx.scene.Scene;
+import javafx.scene.input.*;
+import javafx.scene.layout.*;
+import javafx.scene.text.Text;
+import javafx.stage.Stage;
+
+import java.io.*;
+import java.net.*;
+import java.util.*;
+
+public class FinalZombieSurvivalGame extends Application {
+
+    private MultiplayerManager multiplayerManager;
+    private World world;
+    private GameUI gameUI;
+
+    public static void main(String[] args) {
+        launch(args);
+    }
+
+    @Override
+    public void start(Stage primaryStage) {
+        multiplayerManager = new MultiplayerManager();
+        world = new World();
+        gameUI = new GameUI();
+
+        // AnimationTimer for real-time updates
+        new AnimationTimer() {
+            @Override
+            public void handle(long now) {
+                world.updateWorldState();
+                multiplayerManager.syncPlayerData();
+                gameUI.updateUI(world.getPlayers(), world.getZombies(), world.getPlayers().get(0));
+            }
+        }.start();
+
+        // Scene setup
+        StackPane root = new StackPane();
+        root.getChildren().add(gameUI.getRoot());
+        Scene scene = new Scene(root, 1000, 700);
+        primaryStage.setTitle("Final Zombie Survival Game");
+        primaryStage.setScene(scene);
+
+        // Mobile touch event handling
+        scene.setOnTouchPressed(this::handleTouchPress);
+        scene.setOnTouchMoved(this::handleTouchMove);
+
+        primaryStage.show();
+    }
+
+    // Handle touch event for movement (e.g., dragging on screen to move the player)
+    private void handleTouchPress(TouchEvent event) {
+        Player player = world.getPlayers().get(0); // Get the first player (for now)
+        Position touchPosition = new Position((int) event.getTouchPoint().getX(), (int) event.getTouchPoint().getY());
+
+        // Check where the player is touching the screen and move accordingly (adjust as needed)
+        player.setPosition(new Position(touchPosition.getX(), touchPosition.getY()));
+    }
+
+    private void handleTouchMove(TouchEvent event) {
+        Player player = world.getPlayers().get(0); // Get the first player (for now)
+        Position touchPosition = new Position((int) event.getTouchPoint().getX(), (int) event.getTouchPoint().getY());
+
+        // Update the player's position based on the touch drag movement
+        player.setPosition(new Position(touchPosition.getX(), touchPosition.getY()));
+    }
+
+    // Multiplayer Manager class
+    public static class MultiplayerManager {
+        private GameClient gameClient;
+        private Player player;
+
+        public MultiplayerManager() {
+            this.gameClient = new GameClient();
+            this.player = new Player("Player1");
+            gameClient.connectToServer();
+        }
+
+        public void syncPlayerData() {
+            String message = "PLAYER_MOVE|" + player.getPosition().getX() + "|" + player.getPosition().getY();
+            gameClient.sendMessage(message);
+        }
+
+        public void sendPlayerAction() {
+            String actionMessage = "PLAYER_ACTION|ATTACK";
+            gameClient.sendMessage(actionMessage);
+        }
+    }
+
+    // Game Client class for handling server communication
+    public static class GameClient {
+        private static final String SERVER_ADDRESS = "localhost";
+        private static final int SERVER_PORT = 12345;
+        private Socket socket;
+        private PrintWriter out;
+        private BufferedReader in;
+
+        public void connectToServer() {
+            try {
+                socket = new Socket(SERVER_ADDRESS, SERVER_PORT);
+                out = new PrintWriter(socket.getOutputStream(), true);
+                in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
+                System.out.println("Connected to server.");
+                listenForMessages();
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        }
+
+        public void sendMessage(String message) {
+            out.println(message);
+        }
+
+        public void listenForMessages() {
+            new Thread(() -> {
+                try {
+                    String message;
+                    while ((message = in.readLine()) != null) {
+                        System.out.println("Received: " + message);
+                    }
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+            }).start();
+        }
+
+        public void disconnect() {
+            try {
+                socket.close();
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        }
+    }
+
+    // World class handling game objects like players, zombies, base, and seasonal events
+    public static class World {
+        private List<Zombie> zombies;
+        private List<Player> players;
+        private BaseBuilding baseBuilding;
+        private ZombieAI zombieAI;
+        private SeasonalEvents seasonalEvents;
+        private Shop shop;
+
+        public World() {
+            this.zombies = new ArrayList<>();
+            this.players = new ArrayList<>();
+            this.baseBuilding = new BaseBuilding();
+            Player player1 = new Player("Player1");
+            this.zombieAI = new ZombieAI(zombies, player1);
+            this.seasonalEvents = new SeasonalEvents();
+            this.players.add(player1);
+            this.zombies.add(new Zombie(new Position(5, 5)));
+            this.shop = new Shop();
+        }
+
+        public void updateWorldState() {
+            seasonalEvents.applySeasonalEffects();
+            zombieAI.updateZombieAI();
+        }
+
+        public List<Player> getPlayers() {
+            return players;
+        }
+
+        public List<Zombie> getZombies() {
+            return zombies;
+        }
+    }
+
+    // Zombie AI for controlling zombie movement and behavior
+    public static class ZombieAI {
+        private List<Zombie> zombies;
+        private Player targetPlayer;
+
+        public ZombieAI(List<Zombie> zombies, Player targetPlayer) {
+            this.zombies = zombies;
+            this.targetPlayer = targetPlayer;
+        }
+
+        public void updateZombieAI() {
+            for (Zombie zombie : zombies) {
+                Position playerPosition = targetPlayer.getPosition();
+                zombie.moveTo(playerPosition);
+            }
+        }
+    }
+
+    // Base Building class where players can build walls and defenses
+    public static class BaseBuilding {
+        private List<Wall> walls = new ArrayList<>();
+
+        public void buildWall(Position position, String wallType) {
+            walls.add(new Wall(position, wallType));
+        }
+
+        public void render() {
+            for (Wall wall : walls) {
+                wall.render();
+            }
+        }
+    }
+
+    // Wall class representing a wall in the base
+    public static class Wall {
+        private Position position;
+        private String wallType;
+
+        public Wall(Position position, String wallType) {
+            this.position = position;
+            this.wallType = wallType;
+        }
+
+        public void render() {
+            System.out.println("Rendering wall at " + position.getX() + "," + position.getY() + " of type " + wallType);
+        }
+    }
+
+    // Seasonal Events class handling changes during different seasons
+    public static class SeasonalEvents {
+        public void applySeasonalEffects() {
+            String currentSeason = getCurrentSeason();
+            switch (currentSeason) {
+                case "Winter":
+                    System.out.println("Winter effects applied.");
+                    break;
+                case "Halloween":
+                    System.out.println("Halloween effects applied.");
+                    break;
+                default:
+                    break;
+            }
+        }
+
+        private String getCurrentSeason() {
+            return "Winter"; // Just a placeholder, should return dynamic season
+        }
+    }
+
+    // Zombie class representing each zombie in the game
+    public static class Zombie {
+        private Position position;
+
+        public Zombie(Position position) {
+            this.position = position;
+        }
+
+        public void moveTo(Position position) {
+            this.position = position;
+        }
+
+        public Position getPosition() {
+            return this.position;
+        }
+    }
+
+    // Player class representing each player in the game
+    public static class Player {
+        private String name;
+        private Position position;
+        private int coins = 100;
+        private List<Weapon> weapons = new ArrayList<>();
+        private Vehicle vehicle;
+
+        public Player(String name) {
+            this.name = name;
+            this.position = new Position(0, 0);
+        }
+
+        public Position getPosition() {
+            return position;
+        }
+
+        public void setPosition(Position position) {
+            this.position = position;
+        }
+
+        public int getCoins() {
+            return coins;
+        }
+
+        public void addCoins(int amount) {
+            this.coins += amount;
+        }
+
+        public boolean spendCoins(int amount) {
+            if (coins >= amount) {
+                coins -= amount;
+                return true;
+            }
+            return false;
+        }
+
+        public List<Weapon> getWeapons() {
+            return weapons;
+        }
+
+        public void addWeapon(Weapon weapon) {
+            weapons.add(weapon);
+        }
+
+        public void setVehicle(Vehicle vehicle) {
+            this.vehicle = vehicle;
+        }
+
+        public Vehicle getVehicle() {
+            return vehicle;
+        }
+    }
+
+    // Position class for tracking player or zombie location
+    public static class Position {
+        private int x;
+        private int y;
+
+        public Position(int x, int y) {
+            this.x = x;
+            this.y = y;
+        }
+
+        public int getX() {
+            return x;
+        }
+
+        public int getY() {
+            return y;
+        }
+    }
+
+    // Weapon class for managing player weapons
+    public static class Weapon {
+        private String name;
+        private int damage;
+        private int ammo;
+
+        public Weapon(String name, int damage, int ammo) {
+            this.name = name;
+            this.damage = damage;
+            this.ammo = ammo;
+        }
+
+        public String getName() {
+            return name;
+        }
+
+        public int getDamage() {
+            return damage;
+        }
+
+        public int getAmmo() {
+            return ammo;
+        }
+
+        public void use() {
+            if (ammo > 0) ammo--;
+        }
+    }
+
+    // Vehicle class for managing player vehicles
+    public static class Vehicle {
+        private String type;
+        private int speed;
+        private int health;
+
+        public Vehicle(String type, int speed, int health) {
+            this.type = type;
+            this.speed = speed;
+            this.health = health;
+        }
+
+        public String getType() {
+            return type;
+        }
+
+        public int getSpeed() {
+            return speed;
+        }
+
+        public int getHealth() {
+            return health;
+        }
+    }
+
+    // Shop class for in-game purchases
+    public static class Shop {
+        public void displayItems() {
+            System.out.println("Shop: Weapons, Vehicles");
+        }
+
+        public boolean buyWeapon(Player player, Weapon weapon, int cost) {
+            if (player.spendCoins(cost)) {
+                player.addWeapon(weapon);
+                return true;
+            }
+            return false;
+        }
+    }
+
+    // GameUI Class to manage the game visuals (not fully implemented in this snippet).
+    public static class GameUI {
+        public StackPane getRoot() {
+            return new StackPane();
+        }
+
+        public void updateUI(List<Player> players, List<Zombie> zombies, Player currentPlayer) {
+            // Update game UI (score, position, weapon, etc.)
+        }
+    }
+}
 
